@@ -1,0 +1,231 @@
+---
+title: "Project 1 Chicago Crime"
+author: "Colleen Callahan, Brennan Kish, Melanie Piller"
+date: "10/2/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+library(ggmap)
+library(dplyr)
+library(data.table)
+library(ggrepel)
+library(dplyr) 
+library(Amelia) 
+library(simputation)
+library(mice)
+library(plyr) 
+```
+
+The data used in this project was taken from the Chicago Crime dataset published on Kaggle, which was extracted from the Chicago Police Department’s Citizen Law Enforcement Analysis and Reporting (CLEAR) system.  It includes all crime reports recorded in Chicago between 2001 and 2017.  For the purposes of this study, we use the data from three years (2001, 2008, and 2015), and four categories of crime (personal, property, statutory, and other).  These categories were chosen based on information about the primary types of the incidents, found in the definitions of the Illinois Uniform Crime Reporting codes.
+
+We will start by reading in the csv file that we downloaded from the Kaggle website. 
+
+We will then filter on Years 2001, 2008, 2015 so that we can compare the distribution of Crime in Chicago in 7 year increments. Then, we will bind together to have one dataframe that contains data from only 2001, 2008 and 2015. 
+
+
+```{r}
+setwd("~/Desktop/Fall 2018/Data Science")
+Crime_2001_to_2004 <- read.csv("Chicago_Crimes_2001_to_2004.csv", stringsAsFactors = FALSE)
+Crime_2008_to_2011 <- read.csv("Chicago_Crimes_2008_to_2011.csv", stringsAsFactors = FALSE)
+Crime_2012_to_2017 <- read.csv("Chicago_Crimes_2012_to_2017.csv", stringsAsFactors = FALSE)
+
+
+crime_2001 <- Crime_2001_to_2004 %>% filter(Year == 2001)
+crime_2008 <- Crime_2008_to_2011 %>% filter(Year == 2008)
+crime_2015 <- Crime_2012_to_2017 %>% filter(Year == 2015)
+
+chicago_crime <- rbind(crime_2001, crime_2008, crime_2015)
+```
+
+Missing Data Percentages:
+
+First, we look at the total amount of missing data from the dataset. We see the percentage of data that is missing from each column, and most columns do not have a significant amount of missing data. The two columns that suffer the most from missing data are "Latitude" and "Longitude". Both of these features have slightly over 1 percent of their data missing and almost have the exact same percentage of data missing (~1.1322). This leads us to believe that there is a strong correlation between whether or not these statistics get reported - if one is missing, the corresponding value for the other feature in that observation is also likely to be missing. The amount of missing data in these columns was not that large and we did not want to impute the data for the missing values to cause a crime to be reported at an incorrect location. This caused us to simply remove the missing data points from the data as we did not want our analysis and our visualizations to suffer from biased data.
+
+```{r}
+pct_data_missing <- function(x){sum(is.na(x))/length(x)*100}
+apply(chicago_crime,2,pct_data_missing)
+```
+
+
+
+Now we create a new column in our dataframe denoted "Category." We split up the primary types of crime into 4 different categories - Personal Crimes, Property Crimes, Statutory Crimes, and Other. The categories include the following primary types: 
+
+Personal Crimes: CRIM SEXUAL ASSAULT, SEX OFFENSE, HOMICIDE, ASSAULT, STALKING, BATTERY, KIDNAPPING, DOMESTIC VIOLENCE
+
+Property Crimes: MOTOR VEHICLE THEFT, BURGLARY, ARSON, DECEPTIVE PRACTICE, CRIMINAL DAMAGE, ROBBERY, THEFT, CRIMINAL TRESPASS
+
+Statutory Crimes: PUBLIC PEACE VIOLATION, LIQUOR LAW VIOLATION, OBSCENITY, CONCEALED CARRY LICENSE VIOLATION, NARCOTICS, PROSTITUTION, OTHER NARCOTIC VIOLATION, WEAPONS VIOLATION, GAMBLING, PUBLIC INDECENCY
+
+Other: NON-CRIMINAL/NON - CRIMINAL, OFFENSE INVOLVING CHILDREN, INTERFERENCE WITH PUBLIC OFFICER, OTHER OFFENSE, RITUALISM
+
+```{r}
+chicago_crime <- mutate(chicago_crime, Category = ifelse(Primary.Type %in% 
+                        c("ASSAULT","BATTERY","CRIM SEXUAL ASSAULT","DOMESTIC VIOLENCE","HOMICIDE",
+                        "KIDNAPPING","SEX OFFENSE","STALKING"),"Personal Crime",
+                        ifelse(Primary.Type %in% c("ARSON","BURGLARY","CRIMINAL DAMAGE","DECEPTIVE PRACTICE",
+                       "MOTOR VEHICLE THEFT","CRIMINAL TRESPASS","ROBBERY","THEFT"),
+                       "Property Crime",ifelse(Primary.Type %in% c("PUBLIC PEACE VIOLATION",
+                        "LIQUOR LAW VIOLATION","OBSCENITY","PROSTITUTION","GAMBLING","PUBLIC INDECENCY",
+                        "WEAPONS VIOLATION","CONCEALED CARRY LICENSE VIOLATION","NARCOTICS",
+                        "OTHER NARCOTIC VIOLATION"),"Statutory Crime","Other"))))
+```
+
+Here we use ggmap to create visualizations based on location. In order to do so we first look at the map of Chicago on Google maps. To do this we use the get_googlemap() command and set the center of the location to be the latitude and longitude of Chicago. Since longitude is in West, we use a negative value. 
+
+We also use as.numeric() on the columns Latitude and Longitude in our 'chicago_crime' dataframe to convert from character values to numericvalues. This way, they are easier to work with in ggmap().
+
+```{r}
+library(ggmap)
+get_googlemap(urlonly = TRUE)
+
+chicago_map <- ggmap(get_googlemap(center = c(lon = -87.6298, lat = 41.8781),
+                         zoom = 10, scale = 2,
+                         maptype ='terrain',
+                         color = 'color')) 
+
+chicago_crime$Latitude <- as.numeric(chicago_crime$Latitude)
+chicago_crime$Longitude <- as.numeric(chicago_crime$Longitude)
+```
+
+In order to find the 5 most dangerous Neighborhoods in Chicago, we find which Police Districts show up the most frequenctly in our dataframe, and therefore have the most crime. 
+
+In order to find the most frequent districts, we use count() from the plyr package and then arrange in descending order of frequency. We then convert the districts to numeric values which makes it easier to filter on.
+
+```{r}
+Districts <- count(chicago_crime, 'District')
+Districts %>% arrange(desc(freq))
+
+chicago_crime <- chicago_crime %>% mutate(District, as.numeric(District))
+```
+
+The five districts with the most frequent crime are 8, 11, 7, 6, and 4, respectively. Each of these districts have more than 65000 entries in the dataframe 'chicago_crime'.
+
+We will now create a new dataframe with the information from the 5 most dangerous districts. Then we will mutate a new column, 'Neighborhood', in this dataframe with the names of the neighborhoods corresponding with the police districts, according to home.chicagopolice.org/community/districts/. Those neighborhoods include: Chicago Lawn, Harrison, Englewood, Grensham and South Chicago, respectively. 
+
+```{r}
+
+crime_by_district <- chicago_crime %>% group_by(District) %>% filter(n() > 65000)
+
+crime_by_district <- mutate(crime_by_district, Neighborhood = ifelse(District == 11, "Harrison", ifelse(District ==4, "South Chicago", ifelse(District == 6, "Grensham", ifelse(District == 7, "Englewood", "Chicago Lawn")))))
+
+crime_by_district$Neighborhood <- factor(crime_by_district$Neighborhood)
+```
+
+We now create smaller subset of our dataframe with only one entry each from the 5 most dangerous neighborhoods so that we can extract an accurate longitude and latitude for those neighborhoods. 
+
+```{r}
+dangerous_district <- crime_by_district %>% filter(X == '1334' | X == '6359' | X == '6917' | X == '8591' | X == '31234')
+dangerous_district
+```
+
+We can now use this information to plot a heatmap on ggmap(), indicating where the most crime is and marking the 5 most dangerous neighborhoods. To make it easier to extract meaningful information, we make 4 different plots, filtering on the 'Category' of crime. 
+
+Below we subset the big 'chicago_crime' dataframe into 4 smaller dataframes, one with personal crimes, one with property crimes, one with statutory crimes, and one with all other types of crime. 
+
+```{r}
+personal_crimes <- chicago_crime %>% filter(Category == 'Personal Crime')
+property_crimes <- chicago_crime %>% filter(Category == 'Property Crime')
+statutory_crimes <- chicago_crime %>% filter(Category == 'Statutory Crime')
+other_crime <- chicago_crime %>% filter(Category =='Other')
+```
+
+Here we define different colors using the hexadecimal codes to use on our heat maps. 
+
+```{r}
+col1 = "#014AB2" ## Sapphire
+col2 = "#6497b1" ## Moderate cornflower blue
+col3 = "#b3cde0" ## Light blue
+col4 = "#CC0000" ## Red
+col5 = "#a382e5" ## Light purple
+col6 = "#2e8159" ## Evergreen
+col7 = "#ab1b13" ## Dark red
+```
+
+Now we are able to plot the density of these types of crimes onto the map of Chicago. 
+
+We first call 'chicago_map' which is our ggmap() function that gives us an image of Chicago on google maps. We then use geom_point() superimpose points using the latitude and longitude of a specific crimes onto google maps, which gives us the distribution of crimes in certain areas of Chicago. We adjust our alpha value so that the density of the image makes it easy to draw meaningful information about the "dangerous" areas of Chicago, or the areas where crime is most prevalent. 
+
+We can then use geom_point() again to superimpose "markers" of the location of the 5 most dangerous neighborhoods in Chicago. Different shapes of these markers correspond with the different neighborhoods. 
+
+We then use labs() to title the plots corresponding with the distribution of Property Crimes, Personal Crimes, Statutory Crimes, and Other Crimes.
+
+```{r}
+
+chicago_map +  geom_point(aes(x = Longitude, y = Latitude),  color = col1, data = property_crimes, alpha = 1/200, size = 0.2) + theme(legend.position="bottom") + geom_point(aes(x = Longitude, y = Latitude, shape=Neighborhood, stroke = 2), colour=col4, data = dangerous_district, size =3) + scale_shape_manual(values=1:nlevels(crime_by_district$Neighborhood)) + labs(title = "Distribution of Property Crimes")
+```
+
+```{r}
+chicago_map +  geom_point(aes(x = Longitude, y = Latitude),  color = col5, data = personal_crimes, alpha = 1/160, size = 0.2) + theme(legend.position="bottom") + geom_point(aes(x = Longitude, y = Latitude, shape=Neighborhood, stroke = 2), colour=col1, data = dangerous_district, size =3) + scale_shape_manual(values=1:nlevels(crime_by_district$Neighborhood)) + labs(title = "Distribution of Personal Crimes")
+```
+
+```{r}
+chicago_map +  geom_point(aes(x = Longitude, y = Latitude),  colour = col2, data = statutory_crimes, alpha = 1/100, size = 0.2) + theme(legend.position="bottom") + geom_point(aes(x = Longitude, y = Latitude, shape=Neighborhood, stroke = 2), colour=col1, data = dangerous_district, size =3) + scale_shape_manual(values=1:nlevels(crime_by_district$Neighborhood)) + labs(title = "Distribution of Statutory Crimes")
+```
+
+```{r}
+chicago_map +  geom_point(aes(x = Longitude, y = Latitude),  color = col7, data = other_crime, alpha = 1/100, size = 0.2) + theme(legend.position="bottom") + geom_point(aes(x = Longitude, y = Latitude, shape=Neighborhood, stroke = 2), colour=col1, data = dangerous_district, size =3) + scale_shape_manual(values=1:nlevels(crime_by_district$Neighborhood)) + labs(title = "Distribution of Other Crimes")
+```
+
+Above, the four visualizations give us the distribution of crime for each 'Category' of crime (i.e., property, personal, statutory and other). We can see that these plots give us a good indication of the more "dangerous" areas of Chicago. For the most part, property, statutory and other crimes are distributed similarly. Property crimes have a bit of a higher concentration, especially along the northern coast. The 5 most dangerous neighborhoods have a high concentration of crime, as expected. The more southern parts of Chicago are generally more dangerous than the middle or northern parts. 
+
+Next, we look at distribution of crime over days of the week. We create mutated variables for weekday using the lubridate package and the Date feature.
+
+```{r}
+chicago_crime<-mutate(chicago_crime, weekday=weekdays(lubridate::mdy_hms(Date)))
+```
+
+We look at the distribution of crime of each type across the weekdays from all years. We  see that most types of crime are more common on Wednesdays, Fridays, and Saturdays, and least common on Sundays. However, personal crimes are more common on the weekends.
+
+```{r}
+ggplot(data = chicago_crime)+ geom_bar(mapping = aes(x = weekday, fill = Category))+ scale_x_discrete(limits = c("Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"))
+```
+
+Here we look at crime distribution across days of the week from each year individually. We can see that the crime rates by day of the week have become more even over time, but Fridays have the most crime in all three years. We can also see there was the most crime in 2008, up from 2001, but the least total crime was in 2015.
+
+```{r}
+ggplot(data = chicago_crime)+ geom_bar(mapping = aes(x = weekday, fill = Category))+ scale_x_discrete(limits = c("Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"))+facet_wrap(~Year)
+```
+
+Now we'll make another mutated variable for time using the lubridate package and the Date feature
+
+```{r}
+chicago_crime<-mutate(chicago_crime, time = (hour(lubridate::mdy_hms(Date))))
+```
+
+Now, we look at the distribution of crimes throughout the day. We see that midnight and 8 pm are the most common hours for crime, and 5 am is the least common.
+
+```{r}
+ggplot(data=chicago_crime)+geom_bar(mapping=aes(x=time,fill = Category))
+```
+
+Next, we can look at this distribution of crime throughout the day for each of the three years. We see that there is the most crime at 8pm in 2001, at midnight in 2008, and at 1 pm in 2015. 5 am has the least crime for all the years.
+
+```{r}
+ggplot(data=chicago_crime)+geom_bar(mapping=aes(x=time,fill = Category))+facet_wrap(~Year,nrow=2)
+```
+
+
+Here we can tell that the most common Category of Crime for which people are arrested is a Statutory Crime.This information is interesting because Statutory Crime is not the most common type of crime that occurs; this shows that Statutory Crime is the crime type where people are most often caught and punished for their wrongdoing.
+
+```{r}
+
+arrested <- filter(chicago_crime, Arrest == 'True')
+
+themode <- function(x) {
+  uniqx <- unique(x)
+  uniqx[which.max(tabulate(match(x, uniqx)))]
+}
+
+themode(arrested$Category)
+```
+
+
+
